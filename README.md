@@ -4,10 +4,9 @@ An English vocabulary helper for primary-school children. Snap a page, crop to t
 tap a word to hear it, see a child-friendly meaning and an example sentence.
 
 No accounts, no AI service, no tracking. Everything is free:
-- Meanings: Free Dictionary API (dictionaryapi.dev), from Wiktionary (CC BY-SA).
-  The app picks the meaning written in the most everyday words and skips old-fashioned,
-  slang and rude senses.
-- Everyday-words list: SUBTLEX-US word frequencies (top 8,000 words)
+- Meanings: WordNet 3.1 (Princeton University, WordNet licence), built in as dict-a.json to dict-z.json.
+  Meanings are listed most-used first; rude and adult senses are removed.
+- Pronunciation guide: Free Dictionary API (dictionaryapi.dev), when available
 - Example sentences: the dictionary, then Tatoeba (CC BY 2.0 FR), filtered for children
 - English word list: word-list (MIT)
 - Photo reading: Tesseract.js, runs on the device

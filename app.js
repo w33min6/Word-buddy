@@ -1,7 +1,7 @@
 /* Word Buddy — English vocabulary helper for primary-school children.
    No accounts, no AI service.
-   Meanings: Free Dictionary API (dictionaryapi.dev, from Wiktionary)
-   "Everyday words" list: SUBTLEX-US top 8,000 words (common-words.txt)
+   Meanings: WordNet 3.1 (Princeton), built in as dict-a.json … dict-z.json, most-used meaning first
+   Pronunciation guide: Free Dictionary API, when it answers
    Example sentences: dictionary first, then a filtered sentence bank (sentences-en.txt)
    Photo reading: Tesseract.js, on the device. Read aloud: the device's own voice. */
 (() => {
@@ -17,9 +17,6 @@ let words = EXAMPLES.slice(), isExample = true;
 const once = fn => { let p; return () => (p = p || fn().catch(e => { p = null; throw e; })); };
 const getText = async f => { const r = await fetch(f); if (!r.ok) throw new Error(f); return r.text(); };
 const loadWords = once(async () => new Set((await getText("words-en.txt")).split("\n")));
-const loadCommon = once(async () => {
-  const m = new Map(); (await getText("common-words.txt")).split("\n").forEach((w, i) => m.set(w, i)); return m;
-});
 const loadSentences = once(async () => (await getText("sentences-en.txt")).split("\n").filter(Boolean));
 
 function status(t, busy) {
@@ -75,61 +72,39 @@ function renderChips() {
   });
 }
 
-/* ---------------- choosing a child-friendly meaning ---------------- */
-// senses we never show to a child, by label or content
-const SKIP_LABEL = /\b(obsolete|archaic|dated|rare|slang|vulgar|offensive|derogatory|pejorative|historical|dialect(al)?|regional|nonstandard|informal|colloquial|euphemistic|jargon|law|legal|nautical|military|medicine|medical|anatomy|biology|chemistry|physics|mathematics|computing|finance|botany|zoology|heraldry|music theory|linguistics|grammar|philosophy|theology|uk|us|australia|scotland|ireland|canada|india|new zealand|south africa)\b/i;
-const UNSAFE = /\b(sex|sexual|sexually|erotic|penis|vagina|genital|breast|naked|nude|drug|drugs|cocaine|heroin|alcohol|drunk|kill|killing|murder|suicide|corpse|prostitut\w*|rape|whore|bitch|damn|hell|fuck\w*|shit\w*|crap|bastard|weapon|gun|blood)\b/i;
-const FORM_OF = /^(plural of|present participle of|past tense of|past participle of|simple past|third-person|alternative (form|spelling) of|obsolete (form|spelling) of|misspelling of|initialism of|abbreviation of|acronym of|comparative form of|superlative form of)\b/i;
-
+/* ---------------- meanings: WordNet, built in (dict-a.json … dict-z.json) ---------------- */
+// Meanings are listed most-used first, so the first one is usually the one a child needs.
+const shards = {};
+function loadShard(ch) {
+  if (!/^[a-z]$/.test(ch)) return Promise.resolve({});
+  return shards[ch] = shards[ch] || fetch("dict-" + ch + ".json").then(r => { if (!r.ok) throw new Error("dict"); return r.json(); })
+    .catch(e => { delete shards[ch]; throw e; });
+}
 function cleanDef(d) {
-  let s = d.trim();
-  // drop leading labels like "(transitive)" or "(figuratively, informal)"
-  while (/^\([^)]*\)\s*/.test(s)) s = s.replace(/^\([^)]*\)\s*/, "");
-  s = s.replace(/\s*\([^)]*\)/g, "");                 // other bracketed notes
-  s = s.replace(/\s*;\s*[^;]*$/, m => (s.length > 90 ? "" : m)); // trim a long tail after a semicolon
-  s = s.replace(/\bsomething\b/gi, "something").replace(/\bsomeone\b/gi, "someone");
-  s = s.replace(/^Of,? relating to,? or (pertaining to|characteristic of) /i, "About ");
-  s = s.replace(/^Of or (relating|pertaining) to /i, "About ");
-  s = s.replace(/^(Relating|Pertaining) to /i, "About ");
-  s = s.replace(/^Having the quality of being /i, "Being ");
-  s = s.replace(/\s+/g, " ").replace(/\s+([,.;:])/g, "$1").trim();
+  let s = d.replace(/\s*\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+  s = s.replace(/\bsomeone's\b/g, "someone's").replace(/\betc$/, "and so on");
   if (!s) return "";
   s = s.charAt(0).toUpperCase() + s.slice(1);
-  if (!/[.!?]$/.test(s)) s += ".";
-  return s;
+  return /[.!?]$/.test(s) ? s : s + ".";
 }
-function easeScore(def, word, common) {
-  // lower is easier: average "rarity" of the words used, plus a little for length
-  const toks = def.toLowerCase().match(/[a-z']+/g) || [];
-  if (!toks.length) return 1e9;
-  const root = word.toLowerCase().slice(0, Math.max(4, word.length - 3));
-  let rare = 0, n = 0;
-  for (const t of toks) {
-    if (t.length <= 2) continue;
-    n++;
-    if (t.startsWith(root)) { rare += 5; continue; }       // defining a word with itself doesn't help
-    const r = common.has(t) ? common.get(t) : 12000;
-    rare += Math.log10(r + 10);                             // 1 = very common ... 4 = rare
+async function lookup(word) {
+  for (const cand of stems(word)) {
+    const shard = await loadShard(cand.charAt(0));
+    const senses = shard[cand];
+    if (senses && senses.length) return { base: cand, senses: senses.map(([pos, def, ex]) => ({ pos, text: cleanDef(def), examples: (ex || []).map(cap) })) };
   }
-  const avg = rare / Math.max(1, n);
-  const len = toks.length;
-  return avg + (len > 14 ? (len - 14) * 0.08 : 0);
+  return null;
 }
-function childSenses(entries, word, common) {
-  const out = [];
-  entries.forEach(e => (e.meanings || []).forEach((m, mi) => (m.definitions || []).forEach((d, di) => {
-    const raw = d.definition || "";
-    const labels = (raw.match(/^\(([^)]*)\)/) || [])[1] || "";
-    if (SKIP_LABEL.test(labels) || UNSAFE.test(raw) || FORM_OF.test(raw.replace(/^\([^)]*\)\s*/, ""))) return;
-    const text = cleanDef(raw);
-    if (!text || text.split(" ").length > 28) return;
-    // earlier senses are usually the main ones, so they get a small head start
-    const score = easeScore(text, word, common) + mi * 1.2 + di * 0.4;
-    out.push({ text, pos: m.partOfSpeech, score, example: d.example });
-  })));
-  out.sort((a, b) => a.score - b.score);
-  const seen = new Set();
-  return out.filter(s => { const k = s.text.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 4);
+// pronunciation guide: optional, from the Free Dictionary API; skipped quietly if it doesn't answer
+async function phonetic(word) {
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word), { signal: ctl.signal });
+    clearTimeout(t);
+    if (!res.ok) return "";
+    const data = await res.json();
+    return (data.map(e => e.phonetic || (e.phonetics || []).map(p => p.text).find(Boolean)).find(Boolean) || "").replace(/^\/|\/$/g, "");
+  } catch (e) { return ""; }
 }
 
 /* ---------------- step 3: the word panel ---------------- */
@@ -138,20 +113,26 @@ function note(t) { $("pNote").textContent = t; show($("pNote"), !!t); }
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 
+function sense() { return current && current.senses[current.senseIdx]; }
+function examplesNow() {
+  const s = sense();
+  const own = s ? s.examples : [];
+  return [...own, ...current.bank.filter(b => !own.includes(b))];
+}
 function renderMeaning() {
-  const s = current.senses[current.senseIdx];
+  const s = sense();
   $("pMean").textContent = s ? s.text : "";
   $("pPos").textContent = s ? s.pos : "";
   $("nextMean").hidden = current.senses.length < 2;
   $("sayMean").disabled = !s;
 }
 function renderExample() {
-  const e = current, p = $("pEx"); p.textContent = "";
-  const ex = e.examples;
+  const p = $("pEx"); p.textContent = "";
+  const ex = examplesNow();
   $("nextEx").disabled = ex.length < 2; $("sayEx").disabled = !ex.length;
-  if (!ex.length) { p.textContent = e.loadingEx ? "Finding an example…" : "No example sentence found for this word."; return; }
-  const s = ex[e.exIdx % ex.length];
-  const parts = s.split(new RegExp("(" + escapeRe(e.matchWord) + "[a-z'-]*)", "i"));
+  if (!ex.length) { p.textContent = current.loadingEx ? "Finding an example…" : "No example sentence found for this word."; return; }
+  const s = ex[current.exIdx % ex.length];
+  const parts = s.split(wordRe("i"));
   if (parts.length >= 3) { p.append(parts[0]); const b = document.createElement("b"); b.textContent = parts[1]; p.append(b, parts.slice(2).join("")); }
   else p.textContent = s;
 }
@@ -163,76 +144,75 @@ async function openWord(word) {
   const sec = $("wordSec"), r = sec.getBoundingClientRect();
   if (r.top > window.innerHeight * 0.55 || r.top < 0) sec.scrollIntoView({ behavior: "smooth", block: "start" });
   $("lookup").href = "https://www.google.com/search?q=" + encodeURIComponent("define " + word);
-  current = { word, senses: [], senseIdx: 0, examples: [], exIdx: 0, loadingEx: true, matchWord: stemRoot(word) };
+  current = { word, senses: [], senseIdx: 0, bank: [], exIdx: 0, loadingEx: true, matchWord: stemRoot(word) };
   $("pWord").textContent = word; $("pSay").textContent = ""; $("pPos").textContent = "";
   $("pMean").textContent = "Finding the meaning…"; $("nextMean").hidden = true; $("sayMean").disabled = true;
   renderExample();
   speak(word, $("sayWord"));
+  phonetic(word).then(ph => { if (my === token && ph) $("pSay").textContent = "(" + ph + ")"; });
   try {
-    const [found, common] = await Promise.all([dictLookup(word), loadCommon()]);
+    const found = await lookup(word);
     if (my !== token) return;
     if (!found) {
       $("pMean").textContent = "";
-      note("This word or phrase isn't in the dictionary. Check the photo read it correctly, or look it up.");
+      note("This word isn't in the dictionary. Check the photo read it correctly, or look it up.");
     } else {
-      const entries = found.data;
-      const phon = entries.map(e => e.phonetic || (e.phonetics || []).map(p => p.text).find(Boolean)).find(Boolean);
-      $("pSay").textContent = phon ? "(" + phon.replace(/^\/|\/$/g, "") + ")" : "";
-      current.senses = childSenses(entries, found.base, common);
-      if (!current.senses.length) note("The dictionary only has grown-up meanings for this word. Try “Look it up”.");
-      if (found.base.toLowerCase() !== word.toLowerCase()) note("This is the meaning of “" + found.base + "”, the base word.");
-      if (found.base.length < word.length) current.matchWord = stemRoot(found.base);
+      current.senses = found.senses;
+      if (found.base !== word.toLowerCase()) {
+        note("This is the meaning of “" + found.base + "”, the base word.");
+        current.matchWord = stemRoot(found.base);
+      }
       renderMeaning();
-      // dictionary examples that use everyday words come first
-      current.examples = current.senses.map(s => s.example).filter(x => x && x.split(" ").length <= 16 && !UNSAFE.test(x)).map(cap);
     }
   } catch (err) {
     if (my !== token) return;
     $("pMean").textContent = "";
-    note(navigator.onLine === false ? "You're offline. Meanings need the internet. You can still hear the word." : "Couldn't find the meaning just now. Tap the word to try again.");
+    note(navigator.onLine === false ? "You're offline, and this letter of the dictionary hasn't been saved yet. Connect to the internet once and try again." : "Couldn't open the dictionary just now. Tap the word to try again.");
   }
   try {
     const sents = await loadSentences();
     if (my !== token) return;
-    const re = new RegExp("\\b" + escapeRe(current.matchWord) + "[a-z'-]*\\b", "i");
-    const bank = pickExamples(sents.filter(s => re.test(s) && s.split(" ").length >= 5));
-    current.examples = [...current.examples, ...bank.filter(b => !current.examples.includes(b))].slice(0, 6);
+    const re = wordRe("i");
+    current.bank = pickExamples(sents.filter(s => re.test(s) && s.split(" ").length >= 5));
   } catch (e) {}
   if (my !== token) return;
   current.loadingEx = false;
   renderExample();
 }
 
-const enCache = new Map();
 function stems(w) {
-  const s = new Set([w]);
-  const l = w.toLowerCase(); s.add(l);
-  if (l.includes(" ")) { s.add(l.replace(/ /g, "-")); return [...s]; }
+  const s = new Set();
+  const l = w.toLowerCase().trim().replace(/[’]/g, "'"); s.add(l);
+  const words = l.split(" ");
+  if (words.length > 1) {
+    // phrases: also try the base form of the first word ("geared up" -> "gear up")
+    for (const f of stems(words[0])) s.add([f, ...words.slice(1)].join(" "));
+    return [...s];
+  }
   const add = x => x.length > 2 && s.add(x);
   if (/ies$/.test(l)) add(l.slice(0, -3) + "y");
-  if (/(ches|shes|sses|xes|zes)$/.test(l)) add(l.slice(0, -2));
+  if (/(ches|shes|sses|xes|zes|oes)$/.test(l)) add(l.slice(0, -2));
   if (/s$/.test(l) && !/ss$/.test(l)) add(l.slice(0, -1));
   if (/ied$/.test(l)) add(l.slice(0, -3) + "y");
   if (/ed$/.test(l)) { add(l.slice(0, -2)); add(l.slice(0, -1)); if (/(.)\1ed$/.test(l)) add(l.slice(0, -3)); }
   if (/ing$/.test(l)) { add(l.slice(0, -3)); add(l.slice(0, -3) + "e"); if (/(.)\1ing$/.test(l)) add(l.slice(0, -4)); }
+  if (/ier$/.test(l)) add(l.slice(0, -3) + "y");
+  if (/iest$/.test(l)) add(l.slice(0, -4) + "y");
+  if (/er$/.test(l)) { add(l.slice(0, -2)); add(l.slice(0, -1)); }
+  if (/est$/.test(l)) { add(l.slice(0, -3)); add(l.slice(0, -2)); }
+  if (/ily$/.test(l)) add(l.slice(0, -3) + "y");
   if (/ly$/.test(l)) add(l.slice(0, -2));
   return [...s];
 }
-async function dictLookup(w) {
-  const key = w.toLowerCase();
-  if (enCache.has(key)) return enCache.get(key);
-  for (const cand of stems(w)) {
-    const res = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(cand));
-    if (res.status === 404) continue;
-    if (!res.ok) throw new Error("dict " + res.status);
-    const out = { data: await res.json(), base: cand };
-    enCache.set(key, out); return out;
-  }
-  enCache.set(key, null); return null;
+// matches the word in its different forms; a phrase must appear as a whole ("geared up", "gears up")
+function wordRe(flags) {
+  const parts = current.matchWord.split(" ");
+  const tail = parts.slice(1).map(escapeRe).join("\\s+");
+  return new RegExp("(\\b" + escapeRe(parts[0]) + "[a-z'-]*" + (tail ? "\\s+" + tail : "") + "\\b)", flags);
 }
 function stemRoot(w) {
   const l = w.toLowerCase();
-  if (l.includes(" ")) return l;
+  if (l.includes(" ")) { const [f, ...rest] = l.split(" "); return [f.replace(/(ing|ed|es|s)$/, "").replace(/e$/, "") || f, ...rest].join(" "); }
   return l.replace(/(ies|ied)$/, "i").replace(/(ing|ed|es|s)$/, "").replace(/e$/, "") || l;
 }
 function pickExamples(list) {
@@ -244,10 +224,10 @@ function pickExamples(list) {
 }
 
 $("sayWord").addEventListener("click", () => current && speak(current.word, $("sayWord")));
-$("sayMean").addEventListener("click", () => { const s = current && current.senses[current.senseIdx]; if (s) speak(s.text, $("sayMean")); });
-$("nextMean").addEventListener("click", () => { if (!current) return; current.senseIdx = (current.senseIdx + 1) % current.senses.length; stopSpeech(); renderMeaning(); });
-$("sayEx").addEventListener("click", () => { if (current && current.examples.length) speak(current.examples[current.exIdx % current.examples.length], $("sayEx")); });
-$("nextEx").addEventListener("click", () => { if (!current) return; current.exIdx = (current.exIdx + 1) % Math.max(1, current.examples.length); stopSpeech(); renderExample(); });
+$("sayMean").addEventListener("click", () => { const s = sense(); if (s) speak(s.text, $("sayMean")); });
+$("nextMean").addEventListener("click", () => { if (!current) return; current.senseIdx = (current.senseIdx + 1) % current.senses.length; current.exIdx = 0; stopSpeech(); renderMeaning(); renderExample(); });
+$("sayEx").addEventListener("click", () => { const ex = current ? examplesNow() : []; if (ex.length) speak(ex[current.exIdx % ex.length], $("sayEx")); });
+$("nextEx").addEventListener("click", () => { if (!current) return; current.exIdx++; stopSpeech(); renderExample(); });
 
 /* ---------------- step 1: photo, rotate, crop ---------------- */
 $("camBtn").addEventListener("click", () => $("camInput").click());
@@ -391,6 +371,6 @@ $("typeGo").addEventListener("click", () => {
 
 /* ---------------- start ---------------- */
 renderChips();
-loadWords().catch(() => {}); loadCommon().catch(() => {});
+loadWords().catch(() => {});
 if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
 })();
