@@ -7,7 +7,7 @@ No accounts, no AI service, no tracking. Everything is free:
 - Meanings: WordNet 3.1 (Princeton University, WordNet licence), built in as dict-a.json to dict-z.json.
   Meanings are listed most-used first; rude and adult senses are removed.
 - Pronunciation guide: Free Dictionary API (dictionaryapi.dev), when available
-- Example sentences: the dictionary, then Tatoeba (CC BY 2.0 FR), filtered for children
+- Example sentences: WordNet's own examples for each meaning. When a meaning has none, the app says so rather than guessing.
 - English word list: word-list (MIT)
 - Photo reading: Tesseract.js, runs on the device
 - Read aloud: the device's own voice

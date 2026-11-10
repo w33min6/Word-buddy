@@ -2,7 +2,7 @@
    App files are served from the cache and refreshed in the background,
    so an update shows up the next time the app is opened.
    To publish an update, change VERSION below. */
-const VERSION = "wb-2026-11-10-4";
+const VERSION = "wb-2026-11-10-6";
 const SHELL = ["./", "index.html", "app.js", "prep.js", "manifest.webmanifest",
   "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
 

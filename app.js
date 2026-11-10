@@ -2,7 +2,7 @@
    No accounts, no AI service.
    Meanings: WordNet 3.1 (Princeton), built in as dict-a.json … dict-z.json, most-used meaning first
    Pronunciation guide: Free Dictionary API, when it answers
-   Example sentences: dictionary first, then a filtered sentence bank (sentences-en.txt)
+   Example sentences: WordNet's own examples for each meaning (written by lexicographers)
    Photo reading: Tesseract.js, on the device. Read aloud: the device's own voice. */
 (() => {
 "use strict";
@@ -17,7 +17,6 @@ let words = EXAMPLES.slice(), isExample = true;
 const once = fn => { let p; return () => (p = p || fn().catch(e => { p = null; throw e; })); };
 const getText = async f => { const r = await fetch(f); if (!r.ok) throw new Error(f); return r.text(); };
 const loadWords = once(async () => new Set((await getText("words-en.txt")).split("\n")));
-const loadSentences = once(async () => (await getText("sentences-en.txt")).split("\n").filter(Boolean));
 
 function status(t, busy) {
   if (!t) { show($("status"), false); return; }
@@ -116,8 +115,7 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 function sense() { return current && current.senses[current.senseIdx]; }
 function examplesNow() {
   const s = sense();
-  const own = s ? s.examples : [];
-  return [...own, ...current.bank.filter(b => !own.includes(b))];
+  return s ? s.examples : [];
 }
 function renderMeaning() {
   const s = sense();
@@ -130,7 +128,7 @@ function renderExample() {
   const p = $("pEx"); p.textContent = "";
   const ex = examplesNow();
   $("nextEx").disabled = ex.length < 2; $("sayEx").disabled = !ex.length;
-  if (!ex.length) { p.textContent = current.loadingEx ? "Finding an example…" : "No example sentence found for this word."; return; }
+  if (!ex.length) { p.textContent = current.loadingEx ? "Finding an example…" : "No example for this meaning yet."; return; }
   const s = ex[current.exIdx % ex.length];
   const parts = s.split(wordRe("i"));
   if (parts.length >= 3) { p.append(parts[0]); const b = document.createElement("b"); b.textContent = parts[1]; p.append(b, parts.slice(2).join("")); }
@@ -144,7 +142,7 @@ async function openWord(word) {
   const sec = $("wordSec"), r = sec.getBoundingClientRect();
   if (r.top > window.innerHeight * 0.55 || r.top < 0) sec.scrollIntoView({ behavior: "smooth", block: "start" });
   $("lookup").href = "https://www.google.com/search?q=" + encodeURIComponent("define " + word);
-  current = { word, senses: [], senseIdx: 0, bank: [], exIdx: 0, loadingEx: true, matchWord: stemRoot(word) };
+  current = { word, senses: [], senseIdx: 0, exIdx: 0, loadingEx: true, matchWord: stemRoot(word) };
   $("pWord").textContent = word; $("pSay").textContent = ""; $("pPos").textContent = "";
   $("pMean").textContent = "Finding the meaning…"; $("nextMean").hidden = true; $("sayMean").disabled = true;
   renderExample();
@@ -169,12 +167,6 @@ async function openWord(word) {
     $("pMean").textContent = "";
     note(navigator.onLine === false ? "You're offline, and this letter of the dictionary hasn't been saved yet. Connect to the internet once and try again." : "Couldn't open the dictionary just now. Tap the word to try again.");
   }
-  try {
-    const sents = await loadSentences();
-    if (my !== token) return;
-    const re = wordRe("i");
-    current.bank = pickExamples(sents.filter(s => re.test(s) && s.split(" ").length >= 5));
-  } catch (e) {}
   if (my !== token) return;
   current.loadingEx = false;
   renderExample();
@@ -215,13 +207,6 @@ function stemRoot(w) {
   if (l.includes(" ")) { const [f, ...rest] = l.split(" "); return [f.replace(/(ing|ed|es|s)$/, "").replace(/e$/, "") || f, ...rest].join(" "); }
   return l.replace(/(ies|ied)$/, "i").replace(/(ing|ed|es|s)$/, "").replace(/e$/, "") || l;
 }
-function pickExamples(list) {
-  // medium-length sentences read best; shuffle a little so "Another" feels fresh
-  const ideal = 45;
-  const best = list.slice().sort((a, b) => Math.abs(a.length - ideal) - Math.abs(b.length - ideal)).slice(0, 12);
-  for (let i = best.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [best[i], best[j]] = [best[j], best[i]]; }
-  return best.slice(0, 5);
-}
 
 $("sayWord").addEventListener("click", () => current && speak(current.word, $("sayWord")));
 $("sayMean").addEventListener("click", () => { const s = sense(); if (s) speak(s.text, $("sayMean")); });
@@ -240,10 +225,12 @@ const crop = { x: .05, y: .05, w: .9, h: .9 };
 async function fileToCanvas(f) {
   const MAX = 2600;
   let src, W, H;
-  try { src = await createImageBitmap(f, { imageOrientation: "from-image" }); W = src.width; H = src.height; }
-  catch (e) {
+  // An <img> applies the phone's "rotate me" tag in Safari and Chrome, so landscape photos come out upright
+  try {
     const url = URL.createObjectURL(f); src = new Image(); src.src = url; await src.decode();
     W = src.naturalWidth; H = src.naturalHeight; setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    src = await createImageBitmap(f, { imageOrientation: "from-image" }); W = src.width; H = src.height;
   }
   const sc = Math.min(1, MAX / Math.max(W, H));
   const c = document.createElement("canvas"); c.width = Math.round(W * sc); c.height = Math.round(H * sc);
@@ -300,7 +287,7 @@ $("cancelCrop").addEventListener("click", () => { show($("cropper"), false); src
   box.addEventListener("pointerup", end); box.addEventListener("pointercancel", end);
 })();
 
-function croppedClean() {
+function croppedRaw() {
   const W = srcCanvas.width, H = srcCanvas.height;
   const sx = Math.round(crop.x * W), sy = Math.round(crop.y * H);
   const sw = Math.max(1, Math.round(crop.w * W)), sh = Math.max(1, Math.round(crop.h * H));
@@ -309,12 +296,28 @@ function croppedClean() {
   const g = c.getContext("2d", { willReadFrequently: true });
   g.imageSmoothingQuality = "high";
   g.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+// shadows evened out and table lines removed; done after any turning so lines and letters aren't confused
+function cleanCanvas(c) {
+  const g = c.getContext("2d", { willReadFrequently: true });
   const img = g.getImageData(0, 0, c.width, c.height), d = img.data, n = c.width * c.height;
   const gray = new Uint8ClampedArray(n);
   for (let i = 0; i < n; i++) gray[i] = (d[i * 4] * 299 + d[i * 4 + 1] * 587 + d[i * 4 + 2] * 114) / 1000;
   const out = WB.cleanImage(gray, c.width, c.height);
   for (let i = 0; i < n; i++) { d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = out[i]; d[i * 4 + 3] = 255; }
   g.putImageData(img, 0, 0);
+  return c;
+}
+
+function rotateCanvas(src, deg) {
+  const c = document.createElement("canvas");
+  const side = deg === 90 || deg === 270;
+  c.width = side ? src.height : src.width; c.height = side ? src.width : src.height;
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+  g.translate(c.width / 2, c.height / 2); g.rotate(deg * Math.PI / 180);
+  g.drawImage(src, -src.width / 2, -src.height / 2);
   return c;
 }
 
@@ -337,11 +340,32 @@ $("useCrop").addEventListener("click", async () => {
   };
   try {
     const [worker, dict] = await Promise.all([getWorker(), loadWords()]);
-    const { data } = await worker.recognize(croppedClean(), {}, { blocks: true, text: true });
-    const lines = [];
-    for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
-      lines.push({ words: (l.words || []).map(x => ({ text: x.text, conf: x.confidence, x0: x.bbox.x0, x1: x.bbox.x1, y0: x.bbox.y0, y1: x.bbox.y1 })) });
-    const got = WB.wordsFromOcr(lines, "en", s => dict.has(s));
+    const has = s => dict.has(s);
+    const raw = croppedRaw();
+    // read the words; if the page seems sideways or upside down, try the other ways round and keep the best
+    const read = async (img) => {
+      const { data } = await worker.recognize(img, {}, { blocks: true, text: true });
+      const lines = [];
+      for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
+        lines.push({ words: (l.words || []).map(x => ({ text: x.text, conf: x.confidence, x0: x.bbox.x0, x1: x.bbox.x1, y0: x.bbox.y0, y1: x.bbox.y1 })) });
+      const items = WB.wordsFromOcr(lines, "en", has);
+      const all = lines.flatMap(l => l.words);
+      // only clearly-read real words of 4+ letters count; sideways text gives scraps like "en" or "ow"
+      const real = t => { const c = t.toLowerCase().replace(/[^a-z'-]/g, ""); return c.length >= 4 && has(c); };
+      const good = all.filter(w => w.conf >= 70 && real(w.text)).length;
+      const longItems = items.filter(t => t.replace(/[^a-z]/gi, "").length >= 4).length;
+      return { items, score: good + longItems * 0.5 };
+    };
+    let best = await read(cleanCanvas(rotateCanvas(raw, 0)));
+    if (best.score < 4) {
+      for (const deg of [90, 270, 180]) {
+        status("Trying the photo another way round…", true);
+        const r = await read(cleanCanvas(rotateCanvas(raw, deg)));
+        if (r.score > best.score) best = r;
+        if (best.score >= 6) break;
+      }
+    }
+    const got = best.items;
     if (!got.length) { status("No words found. Turn the photo the right way up, make the box fit the words, or take a clearer photo in good light."); return; }
     words = got; isExample = false;
     renderChips(); show($("cropper"), false); srcCanvas = null;

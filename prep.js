@@ -160,8 +160,8 @@
     }
     const c = cleanEn(t);
     if (!/^[A-Za-z][A-Za-z'-]*$/.test(c)) return false;
-    if (wd.conf >= 75) return true;
-    return has(c.toLowerCase());
+    if (wd.conf >= 75) return c.length >= 2;
+    return c.length >= 3 && has(c.toLowerCase());
   }
 
   /* ---------- typed input -> word list ---------- */
